@@ -30,7 +30,7 @@ python do_dependencytrack_init() {
         "serialNumber": "urn:uuid:" + str(uuid.uuid4()),
         "version": 1,
         "metadata": {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now().astimezone().replace(microsecond=0).isoformat(),
         },
         "components": []
     })
@@ -56,7 +56,8 @@ python do_dependencytrack_collect() {
             sbom["components"].append({
                 "name": names[index],
                 "version": version,
-                "cpe": cpe
+                "cpe": cpe,
+                "type": "library"
             })
 
     # write it back to the deploy directory
@@ -106,8 +107,8 @@ python do_dependencytrack_upload () {
     else:
         bb.debug(2, f"SBOM successfully uploaded to {dt_url}")
 }
-addhandler do_dependencytrack_upload
-do_dependencytrack_upload[eventmask] = "bb.event.BuildCompleted"
+#addhandler do_dependencytrack_upload
+#do_dependencytrack_upload[eventmask] = "bb.event.BuildCompleted"
 
 def read_sbom(d):
     import json
