@@ -53,12 +53,20 @@ python do_dependencytrack_collect() {
     for index, cpe in enumerate(oe.cve_check.get_cpe_ids(name, version)):
         bb.debug(2, f"Collecting pagkage {name}@{version} ({cpe})")
         if not next((c for c in sbom["components"] if c["cpe"] == cpe), None):
-            sbom["components"].append({
-                "name": names[index],
+            product = names[index]
+            if ":" in product:
+                vendor, product = product.split(":", 1)
+            else:
+                vendor = None
+            comp = {
+                "name": product,
                 "version": version,
                 "cpe": cpe,
                 "type": "library"
-            })
+            }
+            if vendor is not None:
+                comp["publisher"] = vendor # published is closest to vendor
+            sbom["components"].append(comp)
 
     # write it back to the deploy directory
     write_sbom(d, sbom)
