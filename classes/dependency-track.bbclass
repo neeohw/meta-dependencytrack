@@ -11,9 +11,14 @@ DEPENDENCYTRACK_SBOM ??= "${DEPENDENCYTRACK_DIR}/bom.json"
 DEPENDENCYTRACK_TMP ??= "${TMPDIR}/dependency-track"
 DEPENDENCYTRACK_LOCK ??= "${DEPENDENCYTRACK_TMP}/bom.lock"
 
+# Set DEPENDENCYTRACK_UPLOAD to False if you want to control the upload in other
+# steps.
+DEPENDENCYTRACK_UPLOAD ??= "True"
 DEPENDENCYTRACK_PROJECT ??= ""
 DEPENDENCYTRACK_API_URL ??= ""
 DEPENDENCYTRACK_API_KEY ??= ""
+
+DT_LICENSE_CONVERSION_MAP ??= '{ "GPLv2+" : "GPL-2.0-or-later", "GPLv2" : "GPL-2.0", "LGPLv2" : "LGPL-2.0", "LGPLv2+" : "LGPL-2.0-or-later", "LGPLv2.1+" : "LGPL-2.1-or-later", "LGPLv2.1" : "LGPL-2.1"}'
 
 python do_dependencytrack_init() {
     import uuid
@@ -66,8 +71,12 @@ python do_dependencytrack_collect() {
             }
             if vendor is not None:
                 comp["publisher"] = vendor # published is closest to vendor
-            sbom["components"].append(comp)
 
+            license_json = get_licenses(d)
+            if license_json:
+                comp["licenses"] = license_json
+
+            sbom["components"].append(comp)
     # write it back to the deploy directory
     write_sbom(d, sbom)
 }
@@ -87,6 +96,10 @@ python do_dependencytrack_upload () {
 
     if d.getVar(var_api_url) == "":
         bb.debug(2, f"Not uploading to Dependency Track, no API URL set in {var_api_url}")
+        return
+
+    dt_upload = bb.utils.to_boolean(d.getVar('DEPENDENCYTRACK_UPLOAD'))
+    if not dt_upload:
         return
 
     sbom_path = d.getVar("DEPENDENCYTRACK_SBOM")
@@ -135,3 +148,42 @@ def write_sbom(d, sbom):
     Path(d.getVar("DEPENDENCYTRACK_SBOM")).write_text(
         json.dumps(sbom, indent=2)
     )
+
+def get_licenses(d) :
+    from pathlib import Path
+    import json
+    license_expression = d.getVar("LICENSE")
+    if license_expression:
+        license_json = []
+        licenses = license_expression.replace("|", "").replace("&", "").split()
+        for license in licenses:
+            license_conversion_map = json.loads(d.getVar('DT_LICENSE_CONVERSION_MAP'))
+            converted_license = None
+            try:
+                converted_license =  license_conversion_map[license]
+            except Exception as e:
+                    pass
+            if not converted_license:
+                converted_license = license
+            # Search for the license in COMMON_LICENSE_DIR and LICENSE_PATH
+            for directory in [d.getVar('COMMON_LICENSE_DIR')] + (d.getVar('LICENSE_PATH') or '').split():
+                try:
+                    with (Path(directory) / converted_license).open(errors="replace") as f:
+                        extractedText = f.read()
+                        license_data = {
+                            "license": {
+                                "name" : converted_license,
+                                "text": {
+                                    "contentType": "text/plain",
+                                    "content": extractedText
+                                    }
+                            }
+                        }
+                        license_json.append(license_data)
+                        break
+                except FileNotFoundError:
+                    pass
+            license_json.append({"expression" : license_expression})
+        return license_json 
+    return None
+
