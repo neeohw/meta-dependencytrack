@@ -30,7 +30,7 @@ python do_dependencytrack_init() {
         "serialNumber": "urn:uuid:" + str(uuid.uuid4()),
         "version": 1,
         "metadata": {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now().astimezone().replace(microsecond=0).isoformat(),
         },
         "components": []
     })
@@ -53,11 +53,20 @@ python do_dependencytrack_collect() {
     for index, cpe in enumerate(oe.cve_check.get_cpe_ids(name, version)):
         bb.debug(2, f"Collecting pagkage {name}@{version} ({cpe})")
         if not next((c for c in sbom["components"] if c["cpe"] == cpe), None):
-            sbom["components"].append({
-                "name": names[index],
+            product = names[index]
+            if ":" in product:
+                vendor, product = product.split(":", 1)
+            else:
+                vendor = None
+            comp = {
+                "name": product,
                 "version": version,
-                "cpe": cpe
-            })
+                "cpe": cpe,
+                "type": "library"
+            }
+            if vendor is not None:
+                comp["publisher"] = vendor # published is closest to vendor
+            sbom["components"].append(comp)
 
     # write it back to the deploy directory
     write_sbom(d, sbom)
@@ -112,8 +121,8 @@ python do_dependencytrack_upload () {
     else:
         bb.debug(2, f"SBOM successfully uploaded to {dt_url}")
 }
-addhandler do_dependencytrack_upload
-do_dependencytrack_upload[eventmask] = "bb.event.BuildCompleted"
+#addhandler do_dependencytrack_upload
+#do_dependencytrack_upload[eventmask] = "bb.event.BuildCompleted"
 
 def read_sbom(d):
     import json
