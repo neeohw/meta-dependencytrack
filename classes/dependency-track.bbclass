@@ -81,12 +81,15 @@ python do_dependencytrack_collect() {
                 vendor, product = product.split(":", 1)
             else:
                 vendor = None
+
+            bom_ref = str(uuid.uuid4())
+
             comp = {
                 "name": product,
                 "version": version,
                 "cpe": cpe,
                 "type": "library",
-                "bom-ref": str(uuid.uuid4())
+                "bom-ref": bom_ref
             }
             if vendor is not None:
                 comp["publisher"] = vendor # published is closest to vendor
@@ -148,9 +151,7 @@ python do_dependencytrack_upload () {
     import time
     from pathlib import Path
 
-    var_api_url = "DEPENDENCYTRACK_API_URL"
-
-    if d.getVar(var_api_url) == "":
+    if d.getVar("DEPENDENCYTRACK_API_URL") == "":
         bb.debug(2, f"Not uploading to Dependency Track, no API URL set in {var_api_url}")
         return
 
@@ -161,8 +162,8 @@ python do_dependencytrack_upload () {
     sbom_path = d.getVar("DEPENDENCYTRACK_SBOM")
     vex_path  = d.getVar("DEPENDENCYTRACK_VEX")
     dt_project = d.getVar("DEPENDENCYTRACK_PROJECT")
-    dt_sbom_url = f"{d.getVar('var_api_url')}/v1/bom"
-    dt_vex_url = f"{d.getVar('var_api_url')}/v1/vex"
+    dt_sbom_url = f"{d.getVar('DEPENDENCYTRACK_API_URL')}/v1/bom"
+    dt_vex_url = f"{d.getVar('DEPENDENCYTRACK_API_URL')}/v1/vex"
 
     headers = {
         "Content-Type": "application/json",
