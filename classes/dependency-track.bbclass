@@ -20,6 +20,37 @@ DEPENDENCYTRACK_API_URL ??= ""
 DEPENDENCYTRACK_API_KEY ??= ""
 DEPENDENCYTRACK_SBOM_PROCESSING_TIMEOUT ??= "1200"
 
+# map CVE_STATUS VALUES to CycloneDX impactAnalysisState
+# https://github.com/CycloneDX/specification/blob/1.6/schema/bom-1.6.schema.json#L2510
+
+# used by this class internally when fix is detected (NVD DB version check or CVE patch file)
+IMPACT_ANALYSIS_STATE[patched] = "resolved"
+# use when this class does not detect backported patch (e.g. vendor kernel repo with cherry-picked CVE patch)
+IMPACT_ANALYSIS_STATE[backported-patch] = "resolved"
+# use when NVD DB does not mention patched versions of stable/LTS branches which have upstream CVE backports
+IMPACT_ANALYSIS_STATE[cpe-stable-backport] = "resolved"
+# use when NVD DB does not mention correct version or does not mention any verion at all
+IMPACT_ANALYSIS_STATE[fixed-version] = "resolved"
+
+# used internally by this class if CVE vulnerability is detected which is not marked as fixed or ignored
+IMPACT_ANALYSIS_STATE[unpatched] = "exploitable"
+# use when CVE is confirmed by upstream but fix is still not available
+IMPACT_ANALYSIS_STATE[vulnerable-investigating] = "in_triage"
+
+# used for migration from old concept, do not use for new vulnerabilities
+IMPACT_ANALYSIS_STATE[ignored] = "not_affected"
+# use when NVD DB wrongly indicates vulnerability which is actually for a different component
+IMPACT_ANALYSIS_STATE[cpe-incorrect] = "false_positive"
+# use when upstream does not accept the report as a vulnerability (e.g. works as designed)
+IMPACT_ANALYSIS_STATE[disputed] = "not_affected"
+# use when vulnerability depends on build or runtime configuration which is not used
+IMPACT_ANALYSIS_STATE[not-applicable-config] = "not_affected"
+# use when vulnerability affects other platform (e.g. Windows or Debian)
+IMPACT_ANALYSIS_STATE[not-applicable-platform] = "not_affected"
+# use when upstream acknowledged the vulnerability but does not plan to fix it
+IMPACT_ANALYSIS_STATE[upstream-wontfix] = "not_affected"
+
+
 DT_LICENSE_CONVERSION_MAP ??= '{ "GPLv2+" : "GPL-2.0-or-later", "GPLv2" : "GPL-2.0", "LGPLv2" : "LGPL-2.0", "LGPLv2+" : "LGPL-2.0-or-later", "LGPLv2.1+" : "LGPL-2.1-or-later", "LGPLv2.1" : "LGPL-2.1"}'
 
 python do_dependencytrack_init() {
@@ -115,25 +146,60 @@ python do_dependencytrack_collect() {
                     # however component specific resolving seems not to work at the moment.
                     "affects": [{"ref": f"urn:cdx:{str(uuid.uuid4())}/1#{bom_ref}"}]
                 })
-            # populate vex file with ignored CVEs defined in CVE_CHECK_IGNORE
-            # TODO: In newer versions of Yocto CVE_CHECK_IGNORE is deprecated in favour of CVE_STATUS, which we should also take into account here
+
+            # populate vex file with CVE statuses found in CVE_STATUS and CVE_STATUS_GROUPS
+
+            # first, handle all CVEs still mentioned in deprecated variable CVE_CHECK_IGNORE
             cve_check_ignore = d.getVar("CVE_CHECK_IGNORE")
             if cve_check_ignore is not None:
+                bb.warn("CVE_CHECK_IGNORE is deprecated in favor of CVE_STATUS")
                 for ignored_cve in cve_check_ignore.split():
-                    bb.debug(2, f"Found ignore statement for CVE {ignored_cve} in {name}@{version}")
-                    vex["vulnerabilities"].append({
-                        "id": ignored_cve,
-                        # vex documents require a valid source, see https://github.com/DependencyTrack/dependency-track/issues/2977
-                        # this should always be NVD for yocto CVEs.
-                        "source": {"name": "NVD", "url": "https://nvd.nist.gov/"},
-                        # setting not-affected state for ignored CVEs
-                        "analysis": {"state": "not_affected"},
-                        # ref needs to be in bom-link format, however the uuid does not actually have to match the SBOM document uuid,
-                        # see https://github.com/DependencyTrack/dependency-track/issues/1872#issuecomment-1254265425
-                        # This is not ideal, as "resolved" will be applied to all components within the project containing the CVE,
-                        # however component specific resolving seems not to work at the moment.
-                        "affects": [{"ref": f"urn:cdx:{str(uuid.uuid4())}/1#{bom_ref}"}]
-                    })
+                    bb.debug(2, f"Setting CVE_STATUS[{ignored_cve}] = \"ignored\" since {ignored_cve} is listed in deprecated variable CVE_CHECK_IGNORE")
+                    d.setVarFlag("CVE_STATUS", ignored_cve, "ignored")
+
+            # iterate over CVE_STATUS_GROUPS and set group status for all CVEs listed
+            cve_status_groups = d.getVar("CVE_STATUS_GROUPS")
+            if cve_status_groups is not None:
+                for cve_status_group in cve_status_groups.split():
+                    bb.debug(2, f"Handling {cve_status_group}...")
+                    cve_group = d.getVar(cve_status_group)
+                    if cve_group is not None:
+                        for cve in cve_group.split():
+                            status = d.getVarFlag(cve_status_group, "status")
+                            bb.debug(2, f"Setting CVE_STATUS[{cve}] = \"{status}\"")
+                            d.setVarFlag("CVE_STATUS", cve, status)
+                    else:
+                        bb.warn("CVE_STATUS_GROUPS contains undefined variable %s" % cve_status_group)
+
+            # finally, iterate over all resulting CVE_STATUS var flags and create vex entry for each CVE
+            for cve in (d.getVarFlags("CVE_STATUS") or {}):
+                status = d.getVarFlag("CVE_STATUS", cve)
+                # first, split status at the first colon
+                status_fields = status.split(':', 1)
+                # first field is detailed status
+                detailed_status = status_fields[0]
+                # second field is description
+                description = status_fields[1].strip() if (len(status_fields) > 1) else ""
+                # next, we have to map the detailed_status using IMPACT_ANALYSIS_STATE
+                impact_analysis_state = d.getVarFlag("IMPACT_ANALYSIS_STATE", detailed_status)
+                if impact_analysis_state is None:
+                    bb.warn(f"IMPACT_ANALYSIS_STATE is not defined for status \"{detailed_status}\" given in CVE_STATUS[{cve}] = \"{status}\", falling back to \"exploitable\"")
+                    impact_analysis_state = "exploitable"
+                
+                vex["vulnerabilities"].append({
+                    "id": cve,
+                    # vex documents require a valid source, see https://github.com/DependencyTrack/dependency-track/issues/2977
+                    # this should always be NVD for yocto CVEs.
+                    "source": {"name": "NVD", "url": "https://nvd.nist.gov/"},
+                    # setting not-affected state for ignored CVEs
+                    "analysis": {"state": impact_analysis_state, "detail": description},
+                    # ref needs to be in bom-link format, however the uuid does not actually have to match the SBOM document uuid,
+                    # see https://github.com/DependencyTrack/dependency-track/issues/1872#issuecomment-1254265425
+                    # This is not ideal, as "resolved" will be applied to all components within the project containing the CVE,
+                    # however component specific resolving seems not to work at the moment.
+                    "affects": [{"ref": f"urn:cdx:{str(uuid.uuid4())}/1#{bom_ref}"}]
+                })
+
     # write it back to the deploy directory
     write_json(d.getVar("DEPENDENCYTRACK_SBOM"), sbom)
     write_json(d.getVar("DEPENDENCYTRACK_VEX"), vex)
