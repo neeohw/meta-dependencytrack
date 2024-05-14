@@ -152,7 +152,7 @@ python do_dependencytrack_upload () {
     from pathlib import Path
 
     if d.getVar("DEPENDENCYTRACK_API_URL") == "":
-        bb.debug(2, f"Not uploading to Dependency Track, no API URL set in {var_api_url}")
+        bb.debug(2, f"Not uploading to Dependency Track, no API URL set in DEPENDENCYTRACK_API_URL")
         return
 
     dt_upload = bb.utils.to_boolean(d.getVar('DEPENDENCYTRACK_UPLOAD'))
